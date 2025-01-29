@@ -1,135 +1,170 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import openai
+import nltk
+from nltk.corpus import stopwords
+from collections import Counter
 import pandas as pd
-import csv
-import io
+import openai
+import os
+from dotenv import load_dotenv
+import spacy
+from docx import Document
 
-# Ensure OpenAI API Key is accessible
-if "OPENAI_API_KEY" in st.secrets:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-else:
-    st.error("❌ OpenAI API Key is missing in Streamlit Secrets! Please add it.")
-    st.stop()
+# Load environment variables
+load_dotenv()
 
-# Check if OpenAI API Key is valid
-@st.cache_data
-def verify_openai_key():
-    try:
-        openai.Engine.list()
-        return True
-    except openai.error.AuthenticationError:
-        return False
+# Set OpenAI API key
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-if not verify_openai_key():
-    st.error("❌ Invalid or expired OpenAI API Key! Please check your Streamlit Secrets.")
-    st.stop()
+# Load spaCy model for advanced NLP
+nlp = spacy.load("en_core_web_sm")
 
-# Function to extract key elements from a webpage (caching enabled)
-@st.cache_data
-def extract_content(url):
-    try:
-        response = requests.get(url, timeout=10)
-        soup = BeautifulSoup(response.content, 'html.parser')
+# Program details
+PROGRAM_NAME = "ContentInsightX"
+TAGLINE = "Unlock Competitor Insights with AI-Powered Content Analysis"
+VERSION = "v1.0.0"
 
-        meta_title = soup.find('title').text if soup.find('title') else ''
-        meta_description = (
-            soup.find('meta', attrs={'name': 'description'})['content']
-            if soup.find('meta', attrs={'name': 'description'}) else ''
-        )
-        headers = [h.text.strip() for h in soup.find_all(['h1', 'h2', 'h3'])]
-        text_content = " ".join([p.text.strip() for p in soup.find_all('p')])
+# Set page title and icon for the browser tab
+st.set_page_config(
+    page_title=PROGRAM_NAME,
+    page_icon="🔍",  # You can use an emoji or a URL to an icon
+    layout="wide"
+)
 
-        return {
-            "url": url,
-            "meta_title": meta_title,
-            "meta_description": meta_description,
-            "headers": headers,
-            "text": text_content
-        }
-    except Exception as e:
-        return {"url": url, "error": str(e)}
+# Download NLTK data
+nltk.download('punkt')
+nltk.download('stopwords')
 
-# Function to generate structured content recommendations for each competitor URL separately
-def generate_content_outline(text, url):
+# Function to generate insights using OpenAI API with SEO expertise
+def generate_seo_insights(text):
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You are an expert in content marketing and SEO."},
-            {"role": "user", "content": f"Analyze the content from the competitor URL: {url} and generate a structured content outline including:\n"
-                                        "- Title\n"
-                                        "- SEO-optimized Meta Title & Description\n"
-                                        "- Key Headings (H1, H2, H3)\n"
-                                        "- Suggested sections\n"
-                                        "- Recommended content length\n"
-                                        "- Important keywords to target\n"
-                                        "Here is the extracted competitor content:\n\n{text}"}
+            {"role": "system", "content": "You are an SEO expert that analyzes text and generates SEO-optimized headlines and content outlines."},
+            {"role": "user", "content": f"Analyze this text and generate a structured content outline with clear headlines (specify which should be h1, h2, h3, etc.) optimized for SEO:\n\n{text}"}
         ]
     )
     return response['choices'][0]['message']['content']
 
-# Streamlit UI
-st.title("Competitor Content Analysis & Structured Outline Generator")
+# Function to extract key phrases using spaCy
+def extract_key_phrases(text):
+    doc = nlp(text)
+    key_phrases = [chunk.text for chunk in doc.noun_chunks if len(chunk.text.split()) > 1]
+    return key_phrases
 
-st.write("Analyze competitor URLs and generate structured content recommendations.")
+# Function to export data to CSV
+def export_to_csv(data, filename="content_insights.csv"):
+    df = pd.DataFrame(data)
+    df.to_csv(filename, index=False)
+    return filename
 
-# Input for competitor URLs
-urls = st.text_area("Paste Competitor URLs (one per line)", height=150).splitlines()
+# Function to export data to TXT
+def export_to_txt(data, filename="content_insights.txt"):
+    with open(filename, "w") as file:
+        for item in data:
+            file.write(f"URL: {item['url']}\n")
+            file.write(f"Meta Title: {item['meta_title']}\n")
+            file.write(f"Meta Description: {item['meta_description']}\n")
+            file.write(f"Headers: {', '.join(item['headers'])}\n")
+            file.write(f"Top 10 Words: {', '.join([f'{word}: {freq}' for word, freq in item['word_freq']])}\n")
+            file.write(f"Key Phrases: {', '.join(item['key_phrases'])}\n")
+            file.write(f"Recommended Headline Structure:\n{item['headline_structure']}\n\n")
+    return filename
+
+# Function to export data to DOC
+def export_to_doc(data, filename="content_insights.docx"):
+    doc = Document()
+    for item in data:
+        doc.add_heading(item['url'], level=1)
+        doc.add_paragraph(f"Meta Title: {item['meta_title']}")
+        doc.add_paragraph(f"Meta Description: {item['meta_description']}")
+        doc.add_paragraph(f"Headers: {', '.join(item['headers'])}")
+        doc.add_paragraph(f"Top 10 Words: {', '.join([f'{word}: {freq}' for word, freq in item['word_freq']])}")
+        doc.add_paragraph(f"Key Phrases: {', '.join(item['key_phrases'])}")
+        doc.add_paragraph("Recommended Headline Structure:")
+        doc.add_paragraph(item['headline_structure'])
+        doc.add_page_break()
+    doc.save(filename)
+    return filename
+
+# Streamlit app
+st.title(f"{PROGRAM_NAME} {VERSION}")
+st.markdown(f"**{TAGLINE}**")
+st.write("---")
+
+# Input URLs
+st.write("### Enter Competitor URLs")
+urls = st.text_area("Paste URLs (one per line)", height=100).splitlines()
 
 if st.button("Analyze"):
     results = []
-    
-    with st.spinner("Analyzing competitor websites..."):
-        for url in urls:
-            extracted_data = extract_content(url)
-            if "error" in extracted_data:
-                st.error(f"Failed to analyze {url}: {extracted_data['error']}")
-                continue
-            
-            structured_outline = generate_content_outline(extracted_data["text"], url)
-            extracted_data["structured_outline"] = structured_outline
-            results.append(extracted_data)
+    for url in urls:
+        try:
+            # Fetch HTML
+            response = requests.get(url)
+            soup = BeautifulSoup(response.content, 'html.parser')
 
-    if results:
-        st.success("Analysis complete! See results below.")
-        
-        for result in results:
-            with st.expander(f"🔍 Analysis for {result['url']}"):
-                st.write(f"**Meta Title:** {result['meta_title']}")
-                st.write(f"**Meta Description:** {result['meta_description']}")
-                st.write(f"**Extracted Headings:** {', '.join(result['headers'])}")
-                st.write("### 📌 Recommended Content Outline:")
-                st.write(result["structured_outline"])
+            # Extract meta tags and headers
+            meta_title = soup.find('title').text if soup.find('title') else ''
+            meta_description = soup.find('meta', attrs={'name': 'description'})['content'] if soup.find('meta', attrs={'name': 'description'}) else ''
+            headers = [h.text for h in soup.find_all(['h1', 'h2', 'h3'])]
 
-        # Export to CSV
-        if st.button("📥 Export Content Outline as CSV"):
-            output = io.StringIO()
-            csv_writer = csv.writer(output)
-            csv_writer.writerow(["URL", "Meta Title", "Meta Description", "Headers", "Structured Content Outline"])
-            
-            for result in results:
-                csv_writer.writerow([
-                    result["url"],
-                    result["meta_title"],
-                    result["meta_description"],
-                    ", ".join(result["headers"]),
-                    result["structured_outline"]
-                ])
-            
-            output.seek(0)
-            st.download_button("Download CSV", output.getvalue(), "competitor_analysis.csv", "text/csv")
+            # Extract text content
+            text = ' '.join([p.text for p in soup.find_all('p')])
 
-        # Export to TXT
-        if st.button("📥 Export Content Outline as TXT"):
-            output_txt = io.StringIO()
-            for result in results:
-                output_txt.write(f"### {result['url']}\n")
-                output_txt.write(f"Meta Title: {result['meta_title']}\n")
-                output_txt.write(f"Meta Description: {result['meta_description']}\n")
-                output_txt.write(f"Extracted Headings: {', '.join(result['headers'])}\n")
-                output_txt.write("### 📌 Structured Content Outline:\n")
-                output_txt.write(f"{result['structured_outline']}\n\n")
-            
-            output_txt.seek(0)
-            st.download_button("Download TXT", output_txt.getvalue(), "content_outline.txt", "text/plain")
+            # Tokenize and clean text
+            words = nltk.word_tokenize(text)
+            words = [word.lower() for word in words if word.isalnum() and word.lower() not in stopwords.words('english')]
+            word_freq = Counter(words)
+
+            # Extract key phrases using spaCy
+            key_phrases = extract_key_phrases(text)
+
+            # Generate SEO-optimized headline structure using OpenAI API
+            headline_structure = generate_seo_insights(text)
+
+            # Save results
+            results.append({
+                'url': url,
+                'meta_title': meta_title,
+                'meta_description': meta_description,
+                'headers': headers,
+                'word_freq': word_freq.most_common(10),
+                'key_phrases': key_phrases,
+                'headline_structure': headline_structure
+            })
+        except Exception as e:
+            st.error(f"Error analyzing {url}: {e}")
+
+    # Display insights
+    st.write("## Insights")
+    for result in results:
+        st.write(f"### {result['url']}")
+        st.write(f"**Meta Title:** {result['meta_title']}")
+        st.write(f"**Meta Description:** {result['meta_description']}")
+        st.write(f"**Headers:** {', '.join(result['headers'])}")
+        st.write(f"**Top 10 Words:** {result['word_freq']}")
+        st.write(f"**Key Phrases:** {', '.join(result['key_phrases'])}")
+        st.write(f"**Recommended Headline Structure:**\n{result['headline_structure']}")
+
+    # Visualize word frequencies
+    st.write("## Word Frequency Visualization")
+    all_words = []
+    for result in results:
+        all_words.extend([word for word, _ in result['word_freq']])
+    overall_word_freq = Counter(all_words)
+    top_words = pd.DataFrame(overall_word_freq.most_common(10), columns=['Word', 'Frequency'])
+    st.bar_chart(top_words.set_index('Word'))
+
+    # Export results
+    st.write("## Export Results")
+    if st.button("Export to CSV"):
+        filename = export_to_csv(results)
+        st.success(f"Results exported to {filename}")
+    if st.button("Export to TXT"):
+        filename = export_to_txt(results)
+        st.success(f"Results exported to {filename}")
+    if st.button("Export to DOC"):
+        filename = export_to_doc(results)
+        st.success(f"Results exported to {filename}")
