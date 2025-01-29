@@ -14,6 +14,7 @@ else:
     st.stop()
 
 # Check if OpenAI API Key is valid
+@st.cache_data
 def verify_openai_key():
     try:
         openai.Engine.list()
@@ -25,7 +26,8 @@ if not verify_openai_key():
     st.error("❌ Invalid or expired OpenAI API Key! Please check your Streamlit Secrets.")
     st.stop()
 
-# Function to extract key elements from a webpage
+# Function to extract key elements from a webpage (caching enabled)
+@st.cache_data
 def extract_content(url):
     try:
         response = requests.get(url, timeout=10)
@@ -49,23 +51,21 @@ def extract_content(url):
     except Exception as e:
         return {"url": url, "error": str(e)}
 
-# Function to generate structured content recommendations
-def generate_content_outline(text):
+# Function to batch process OpenAI API calls for faster analysis
+def generate_bulk_content_outlines(text_list):
+    messages = [
+        {"role": "system", "content": "You are an expert in content marketing and SEO."},
+    ]
+    for text in text_list:
+        messages.append(
+            {"role": "user", "content": f"Analyze the following competitor content and generate a structured content outline:\n{text}"}
+        )
+
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are an expert in content marketing and SEO."},
-            {"role": "user", "content": f"Analyze the provided text and recommend a well-structured content outline, including:\n"
-                                        "- Title\n"
-                                        "- SEO-optimized Meta Title & Description\n"
-                                        "- Key Headings (H1, H2, H3) based on competitive analysis\n"
-                                        "- Suggested sections\n"
-                                        "- Recommended content length\n"
-                                        "- Important keywords to target\n"
-                                        "Here is the extracted competitor content:\n\n{text}"}
-        ]
+        messages=messages
     )
-    return response['choices'][0]['message']['content']
+    return [choice["message"]["content"] for choice in response['choices']]
 
 # Streamlit UI
 st.title("Competitor Content Analysis & Structured Outline Generator")
@@ -79,29 +79,38 @@ if st.button("Analyze"):
     results = []
     
     with st.spinner("Analyzing competitor websites..."):
+        extracted_texts = []
+        url_data = []
+
         for url in urls:
             extracted_data = extract_content(url)
             if "error" in extracted_data:
                 st.error(f"Failed to analyze {url}: {extracted_data['error']}")
                 continue
             
-            structured_outline = generate_content_outline(extracted_data["text"])
-            extracted_data["structured_outline"] = structured_outline
-            results.append(extracted_data)
+            extracted_texts.append(extracted_data["text"])
+            url_data.append(extracted_data)
+
+        # Send all extracted texts to OpenAI in a single batch request
+        structured_outlines = generate_bulk_content_outlines(extracted_texts)
+        
+        for idx, structured_outline in enumerate(structured_outlines):
+            url_data[idx]["structured_outline"] = structured_outline
+            results.append(url_data[idx])
 
     if results:
         st.success("Analysis complete! See results below.")
         
         for result in results:
-            st.subheader(f"Analysis for {result['url']}")
-            st.write(f"**Meta Title:** {result['meta_title']}")
-            st.write(f"**Meta Description:** {result['meta_description']}")
-            st.write(f"**Extracted Headings:** {', '.join(result['headers'])}")
-            st.write("### Recommended Content Outline:")
-            st.write(result["structured_outline"])
+            with st.expander(f"🔍 Analysis for {result['url']}"):
+                st.write(f"**Meta Title:** {result['meta_title']}")
+                st.write(f"**Meta Description:** {result['meta_description']}")
+                st.write(f"**Extracted Headings:** {', '.join(result['headers'])}")
+                st.write("### 📌 Recommended Content Outline:")
+                st.write(result["structured_outline"])
 
         # Export to CSV
-        if st.button("Export Content Outline as CSV"):
+        if st.button("📥 Export Content Outline as CSV"):
             output = io.StringIO()
             csv_writer = csv.writer(output)
             csv_writer.writerow(["URL", "Meta Title", "Meta Description", "Headers", "Structured Content Outline"])
@@ -119,14 +128,14 @@ if st.button("Analyze"):
             st.download_button("Download CSV", output.getvalue(), "competitor_analysis.csv", "text/csv")
 
         # Export to TXT
-        if st.button("Export Content Outline as TXT"):
+        if st.button("📥 Export Content Outline as TXT"):
             output_txt = io.StringIO()
             for result in results:
                 output_txt.write(f"### {result['url']}\n")
                 output_txt.write(f"Meta Title: {result['meta_title']}\n")
                 output_txt.write(f"Meta Description: {result['meta_description']}\n")
                 output_txt.write(f"Extracted Headings: {', '.join(result['headers'])}\n")
-                output_txt.write("### Structured Content Outline:\n")
+                output_txt.write("### 📌 Structured Content Outline:\n")
                 output_txt.write(f"{result['structured_outline']}\n\n")
             
             output_txt.seek(0)
