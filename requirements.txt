@@ -1,9 +1,8 @@
 streamlit==1.26.0
 requests==2.31.0
 beautifulsoup4==4.12.2
-nltk==3.8.1
+openai==0.28.0
 pandas==2.0.3
-openai==0.27.8
 python-dotenv==1.0.0
-spacy==3.6.1
-python-docx==0.8.11
+lxml==4.9.3
+pillow==9.4.0  # Ensuring compatibility with Streamlit Cloud
