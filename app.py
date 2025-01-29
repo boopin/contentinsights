@@ -51,21 +51,23 @@ def extract_content(url):
     except Exception as e:
         return {"url": url, "error": str(e)}
 
-# Function to batch process OpenAI API calls for faster analysis
-def generate_bulk_content_outlines(text_list):
-    messages = [
-        {"role": "system", "content": "You are an expert in content marketing and SEO."},
-    ]
-    for text in text_list:
-        messages.append(
-            {"role": "user", "content": f"Analyze the following competitor content and generate a structured content outline:\n{text}"}
-        )
-
+# Function to generate structured content recommendations for each competitor URL separately
+def generate_content_outline(text, url):
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
-        messages=messages
+        messages=[
+            {"role": "system", "content": "You are an expert in content marketing and SEO."},
+            {"role": "user", "content": f"Analyze the content from the competitor URL: {url} and generate a structured content outline including:\n"
+                                        "- Title\n"
+                                        "- SEO-optimized Meta Title & Description\n"
+                                        "- Key Headings (H1, H2, H3)\n"
+                                        "- Suggested sections\n"
+                                        "- Recommended content length\n"
+                                        "- Important keywords to target\n"
+                                        "Here is the extracted competitor content:\n\n{text}"}
+        ]
     )
-    return [choice["message"]["content"] for choice in response['choices']]
+    return response['choices'][0]['message']['content']
 
 # Streamlit UI
 st.title("Competitor Content Analysis & Structured Outline Generator")
@@ -79,24 +81,15 @@ if st.button("Analyze"):
     results = []
     
     with st.spinner("Analyzing competitor websites..."):
-        extracted_texts = []
-        url_data = []
-
         for url in urls:
             extracted_data = extract_content(url)
             if "error" in extracted_data:
                 st.error(f"Failed to analyze {url}: {extracted_data['error']}")
                 continue
             
-            extracted_texts.append(extracted_data["text"])
-            url_data.append(extracted_data)
-
-        # Send all extracted texts to OpenAI in a single batch request
-        structured_outlines = generate_bulk_content_outlines(extracted_texts)
-        
-        for idx, structured_outline in enumerate(structured_outlines):
-            url_data[idx]["structured_outline"] = structured_outline
-            results.append(url_data[idx])
+            structured_outline = generate_content_outline(extracted_data["text"], url)
+            extracted_data["structured_outline"] = structured_outline
+            results.append(extracted_data)
 
     if results:
         st.success("Analysis complete! See results below.")
