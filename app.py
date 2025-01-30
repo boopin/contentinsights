@@ -1,24 +1,17 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import nltk
-from nltk.corpus import stopwords
 from collections import Counter
 import pandas as pd
 import openai
 import os
 from dotenv import load_dotenv
-import spacy
-from docx import Document
 
 # Load environment variables
 load_dotenv()
 
 # Set OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Load spaCy model for advanced NLP
-nlp = spacy.load("en_core_web_sm")
 
 # Program details
 PROGRAM_NAME = "ContentInsightX"
@@ -28,65 +21,9 @@ VERSION = "v1.0.0"
 # Set page title and icon for the browser tab
 st.set_page_config(
     page_title=PROGRAM_NAME,
-    page_icon="🔍",  # You can use an emoji or a URL to an icon
+    page_icon="🔍",
     layout="wide"
 )
-
-# Download NLTK data
-nltk.download('punkt')
-nltk.download('stopwords')
-
-# Function to generate insights using OpenAI API with SEO expertise
-def generate_seo_insights(text):
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are an SEO expert that analyzes text and generates SEO-optimized headlines and content outlines."},
-            {"role": "user", "content": f"Analyze this text and generate a structured content outline with clear headlines (specify which should be h1, h2, h3, etc.) optimized for SEO:\n\n{text}"}
-        ]
-    )
-    return response['choices'][0]['message']['content']
-
-# Function to extract key phrases using spaCy
-def extract_key_phrases(text):
-    doc = nlp(text)
-    key_phrases = [chunk.text for chunk in doc.noun_chunks if len(chunk.text.split()) > 1]
-    return key_phrases
-
-# Function to export data to CSV
-def export_to_csv(data, filename="content_insights.csv"):
-    df = pd.DataFrame(data)
-    df.to_csv(filename, index=False)
-    return filename
-
-# Function to export data to TXT
-def export_to_txt(data, filename="content_insights.txt"):
-    with open(filename, "w") as file:
-        for item in data:
-            file.write(f"URL: {item['url']}\n")
-            file.write(f"Meta Title: {item['meta_title']}\n")
-            file.write(f"Meta Description: {item['meta_description']}\n")
-            file.write(f"Headers: {', '.join(item['headers'])}\n")
-            file.write(f"Top 10 Words: {', '.join([f'{word}: {freq}' for word, freq in item['word_freq']])}\n")
-            file.write(f"Key Phrases: {', '.join(item['key_phrases'])}\n")
-            file.write(f"Recommended Headline Structure:\n{item['headline_structure']}\n\n")
-    return filename
-
-# Function to export data to DOC
-def export_to_doc(data, filename="content_insights.docx"):
-    doc = Document()
-    for item in data:
-        doc.add_heading(item['url'], level=1)
-        doc.add_paragraph(f"Meta Title: {item['meta_title']}")
-        doc.add_paragraph(f"Meta Description: {item['meta_description']}")
-        doc.add_paragraph(f"Headers: {', '.join(item['headers'])}")
-        doc.add_paragraph(f"Top 10 Words: {', '.join([f'{word}: {freq}' for word, freq in item['word_freq']])}")
-        doc.add_paragraph(f"Key Phrases: {', '.join(item['key_phrases'])}")
-        doc.add_paragraph("Recommended Headline Structure:")
-        doc.add_paragraph(item['headline_structure'])
-        doc.add_page_break()
-    doc.save(filename)
-    return filename
 
 # Streamlit app
 st.title(f"{PROGRAM_NAME} {VERSION}")
@@ -101,9 +38,14 @@ if st.button("Analyze"):
     results = []
     for url in urls:
         try:
-            # Fetch HTML
-            response = requests.get(url)
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Fetch and parse HTML
+            @st.cache_data
+            def fetch_and_parse(url):
+                response = requests.get(url)
+                soup = BeautifulSoup(response.content, 'html.parser')
+                return soup
+
+            soup = fetch_and_parse(url)
 
             # Extract meta tags and headers
             meta_title = soup.find('title').text if soup.find('title') else ''
@@ -114,15 +56,14 @@ if st.button("Analyze"):
             text = ' '.join([p.text for p in soup.find_all('p')])
 
             # Tokenize and clean text
+            import nltk
+            nltk.download('punkt')
+            nltk.download('stopwords')
+            from nltk.corpus import stopwords
+
             words = nltk.word_tokenize(text)
             words = [word.lower() for word in words if word.isalnum() and word.lower() not in stopwords.words('english')]
             word_freq = Counter(words)
-
-            # Extract key phrases using spaCy
-            key_phrases = extract_key_phrases(text)
-
-            # Generate SEO-optimized headline structure using OpenAI API
-            headline_structure = generate_seo_insights(text)
 
             # Save results
             results.append({
@@ -130,9 +71,8 @@ if st.button("Analyze"):
                 'meta_title': meta_title,
                 'meta_description': meta_description,
                 'headers': headers,
-                'word_freq': word_freq.most_common(10),
-                'key_phrases': key_phrases,
-                'headline_structure': headline_structure
+                'word_freq': word_freq,
+                'text': text
             })
         except Exception as e:
             st.error(f"Error analyzing {url}: {e}")
@@ -144,27 +84,20 @@ if st.button("Analyze"):
         st.write(f"**Meta Title:** {result['meta_title']}")
         st.write(f"**Meta Description:** {result['meta_description']}")
         st.write(f"**Headers:** {', '.join(result['headers'])}")
-        st.write(f"**Top 10 Words:** {result['word_freq']}")
-        st.write(f"**Key Phrases:** {', '.join(result['key_phrases'])}")
-        st.write(f"**Recommended Headline Structure:**\n{result['headline_structure']}")
+        st.write(f"**Top 10 Words:** {result['word_freq'].most_common(10)}")
 
     # Visualize word frequencies
     st.write("## Word Frequency Visualization")
     all_words = []
     for result in results:
-        all_words.extend([word for word, _ in result['word_freq']])
+        all_words.extend(result['word_freq'].elements())
     overall_word_freq = Counter(all_words)
     top_words = pd.DataFrame(overall_word_freq.most_common(10), columns=['Word', 'Frequency'])
     st.bar_chart(top_words.set_index('Word'))
 
-    # Export results
-    st.write("## Export Results")
-    if st.button("Export to CSV"):
-        filename = export_to_csv(results)
-        st.success(f"Results exported to {filename}")
-    if st.button("Export to TXT"):
-        filename = export_to_txt(results)
-        st.success(f"Results exported to {filename}")
-    if st.button("Export to DOC"):
-        filename = export_to_doc(results)
-        st.success(f"Results exported to {filename}")
+    # Generate structured outline using OpenAI API
+    st.write("## Structured Content Outline")
+    for result in results:
+        insights = generate_insights(result['text'])
+        st.write(f"### Outline for {result['url']}")
+        st.write(insights)
