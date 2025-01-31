@@ -1,103 +1,144 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from collections import Counter
 import pandas as pd
+from docx import Document
+from reportlab.pdfgen import canvas
 import openai
-import os
-from dotenv import load_dotenv
+import io
+from collections import Counter
+import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-# Load environment variables
-load_dotenv()
+# ------------------ CONFIG ------------------
+st.set_page_config(page_title="SEO Content Wizard", page_icon="🔍")
 
-# Set OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# OpenAI API Key (Replace with your actual key)
+OPENAI_API_KEY = "your-openai-api-key"
 
-# Program details
-PROGRAM_NAME = "ContentInsightX"
-TAGLINE = "Unlock Competitor Insights with AI-Powered Content Analysis"
-VERSION = "v1.0.0"
+# Load NLP Model
+nlp = spacy.load("en_core_web_sm")
 
-# Set page title and icon for the browser tab
-st.set_page_config(
-    page_title=PROGRAM_NAME,
-    page_icon="🔍",
-    layout="wide"
-)
+# ------------------ FUNCTION TO CHECK OPENAI API ------------------
+def check_openai_api():
+    """Verifies OpenAI API key by making a test request."""
+    openai.api_key = OPENAI_API_KEY
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello, test OpenAI response"}]
+        )
+        return True  # API is working
+    except Exception as e:
+        return str(e)  # Return error message if API fails
 
-# Streamlit app
-st.title(f"{PROGRAM_NAME} {VERSION}")
-st.markdown(f"**{TAGLINE}**")
-st.write("---")
+# ------------------ HEADER ------------------
+st.title("🔍 SEO Content Wizard")
+st.subheader("Analyze. Optimize. Rank Higher.")
+st.write("Upload competitor URLs to analyze SEO factors and get AI-driven content recommendations.")
 
-# Input URLs
-st.write("### Enter Competitor URLs")
-urls = st.text_area("Paste URLs (one per line)", height=100).splitlines()
+# ------------------ OPENAI API CHECK ------------------
+api_status = check_openai_api()
+if api_status is not True:
+    st.error(f"⚠ OpenAI API Error: {api_status}")
+    st.stop()  # Stop the program if API is not working
 
-if st.button("Analyze"):
-    results = []
-    for url in urls:
+# ------------------ USER INPUT ------------------
+keyword = st.text_input("Enter Target Keyword:")
+urls = st.text_area("Enter 3-10 Competitor URLs (one per line)").split("\n")
+urls = [url.strip() for url in urls if url.strip()]
+
+if st.button("Analyze SEO"):
+    if len(urls) < 3:
+        st.error("Please enter at least 3 competitor URLs.")
+    else:
+        st.success("Analyzing URLs... Please wait.")
+
+        # ------------------ SCRAPING FUNCTION ------------------
+        results = []
+        all_texts = []
+        
+        for url in urls:
+            try:
+                response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                soup = BeautifulSoup(response.text, "html.parser")
+
+                title = soup.title.text if soup.title else "No Title"
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                meta_desc = meta_desc["content"] if meta_desc else "No Meta Description"
+                word_count = len(soup.get_text().split())
+
+                headings = [h.text.strip() for h in soup.find_all(["h1", "h2", "h3"])]
+                internal_links = [a["href"] for a in soup.find_all("a", href=True) if url in a["href"]]
+                external_links = [a["href"] for a in soup.find_all("a", href=True) if url not in a["href"]]
+
+                text_content = soup.get_text()
+                all_texts.append(text_content)
+
+                results.append({
+                    "URL": url,
+                    "Meta Title": title,
+                    "Meta Description": meta_desc,
+                    "Word Count": word_count,
+                    "H1-H3 Headings": headings,
+                    "Internal Links": len(internal_links),
+                    "External Links": len(external_links),
+                    "Content": text_content
+                })
+            
+            except Exception as e:
+                st.error(f"Failed to analyze {url}: {str(e)}")
+
+        df = pd.DataFrame(results)
+        st.dataframe(df)
+
+        # ------------------ NLP KEYWORD CLUSTERING ------------------
+        def extract_keywords(text):
+            doc = nlp(text.lower())
+            words = [token.text for token in doc if token.is_alpha and not token.is_stop]
+            return words
+
+        all_keywords = []
+        for text in all_texts:
+            all_keywords.extend(extract_keywords(text))
+
+        keyword_freq = Counter(all_keywords)
+        st.subheader("🔑 Keyword Clustering & Frequency")
+        st.write(pd.DataFrame(keyword_freq.most_common(20), columns=["Keyword", "Frequency"]))
+
+        # ------------------ COMPETITOR CONTENT GAP ANALYSIS ------------------
+        tfidf = TfidfVectorizer(stop_words="english")
+        tfidf_matrix = tfidf.fit_transform(all_texts)
+        feature_names = tfidf.get_feature_names_out()
+
+        keyword_importance = {feature_names[i]: tfidf_matrix.sum(axis=0).tolist()[0][i] for i in range(len(feature_names))}
+        sorted_keywords = sorted(keyword_importance.items(), key=lambda x: x[1], reverse=True)
+
+        st.subheader("📊 Competitor Content Gap Analysis")
+        st.write(pd.DataFrame(sorted_keywords[:20], columns=["Keyword", "Relevance Score"]))
+
+        # ------------------ AI-POWERED RECOMMENDATIONS ------------------
+        st.subheader("🧠 AI-Powered SEO Recommendations")
+        prompt = f"""
+        Based on competitor content analysis, generate an SEO-optimized content outline for the keyword '{keyword}'.
+
+        Competitor Data:
+        {df.to_string()}
+        
+        Include:
+        - Optimized meta title & description
+        - Ideal word count
+        - Recommended H1, H2, and H3 headings
+        - Missing subtopics to enhance SEO
+        """
+        
         try:
-            # Fetch and parse HTML
-            @st.cache_data
-            def fetch_and_parse(url):
-                response = requests.get(url)
-                soup = BeautifulSoup(response.content, 'html.parser')
-                return soup
-
-            soup = fetch_and_parse(url)
-
-            # Extract meta tags and headers
-            meta_title = soup.find('title').text if soup.find('title') else ''
-            meta_description = soup.find('meta', attrs={'name': 'description'})['content'] if soup.find('meta', attrs={'name': 'description'}) else ''
-            headers = [h.text for h in soup.find_all(['h1', 'h2', 'h3'])]
-
-            # Extract text content
-            text = ' '.join([p.text for p in soup.find_all('p')])
-
-            # Tokenize and clean text
-            import nltk
-            nltk.download('punkt')
-            nltk.download('stopwords')
-            from nltk.corpus import stopwords
-
-            words = nltk.word_tokenize(text)
-            words = [word.lower() for word in words if word.isalnum() and word.lower() not in stopwords.words('english')]
-            word_freq = Counter(words)
-
-            # Save results
-            results.append({
-                'url': url,
-                'meta_title': meta_title,
-                'meta_description': meta_description,
-                'headers': headers,
-                'word_freq': word_freq,
-                'text': text
-            })
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": "You are an SEO expert."}, {"role": "user", "content": prompt}]
+            )
+            ai_recommendations = response["choices"][0]["message"]["content"]
+            st.text_area("SEO Content Recommendations:", ai_recommendations, height=250)
         except Exception as e:
-            st.error(f"Error analyzing {url}: {e}")
+            st.error(f"OpenAI Error: {str(e)}")
 
-    # Display insights
-    st.write("## Insights")
-    for result in results:
-        st.write(f"### {result['url']}")
-        st.write(f"**Meta Title:** {result['meta_title']}")
-        st.write(f"**Meta Description:** {result['meta_description']}")
-        st.write(f"**Headers:** {', '.join(result['headers'])}")
-        st.write(f"**Top 10 Words:** {result['word_freq'].most_common(10)}")
-
-    # Visualize word frequencies
-    st.write("## Word Frequency Visualization")
-    all_words = []
-    for result in results:
-        all_words.extend(result['word_freq'].elements())
-    overall_word_freq = Counter(all_words)
-    top_words = pd.DataFrame(overall_word_freq.most_common(10), columns=['Word', 'Frequency'])
-    st.bar_chart(top_words.set_index('Word'))
-
-    # Generate structured outline using OpenAI API
-    st.write("## Structured Content Outline")
-    for result in results:
-        insights = generate_insights(result['text'])
-        st.write(f"### Outline for {result['url']}")
-        st.write(insights)
