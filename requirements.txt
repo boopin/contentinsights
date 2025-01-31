@@ -1,9 +1,10 @@
-streamlit==1.26.0
-requests==2.31.0
+streamlit==1.29.0
 beautifulsoup4==4.12.2
-nltk==3.8.1
-pandas==2.0.3
-openai==0.28.0
-python-dotenv==1.0.0
-pillow==10.0.0  # Pre-built binary
-lxml==4.9.3
+requests==2.31.0
+pandas==1.5.3
+python-docx==0.8.11
+reportlab==3.6.13
+openai==1.2.3
+spacy==3.5.2
+scikit-learn==1.2.2
+numpy==1.24.2
