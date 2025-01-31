@@ -3,7 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from docx import Document
-from reportlab.pdfgen import canvas
 import openai
 import io
 from collections import Counter
@@ -142,3 +141,40 @@ if st.button("Analyze SEO"):
         except Exception as e:
             st.error(f"OpenAI Error: {str(e)}")
 
+        # ------------------ EXPORT OPTIONS ------------------
+        def export_to_csv(data):
+            return df.to_csv(index=False).encode('utf-8')
+
+        def export_to_docx(data):
+            doc = Document()
+            doc.add_heading("SEO Content Analysis", 0)
+            for row in data:
+                doc.add_paragraph(f"🔗 URL: {row['URL']}")
+                doc.add_paragraph(f"📌 Meta Title: {row['Meta Title']}")
+                doc.add_paragraph(f"📝 Meta Description: {row['Meta Description']}")
+                doc.add_paragraph(f"📄 Word Count: {row['Word Count']}")
+                doc.add_paragraph(f"📌 Headings: {', '.join(row['H1-H3 Headings'])}")
+                doc.add_paragraph(f"🔗 Internal Links: {row['Internal Links']}")
+                doc.add_paragraph(f"🔗 External Links: {row['External Links']}")
+                doc.add_paragraph("-" * 50)
+            buffer = io.BytesIO()
+            doc.save(buffer)
+            return buffer.getvalue()
+
+        def export_to_txt(data):
+            text = "SEO Content Analysis Report\n\n"
+            for row in data:
+                text += f"URL: {row['URL']}\n"
+                text += f"Meta Title: {row['Meta Title']}\n"
+                text += f"Meta Description: {row['Meta Description']}\n"
+                text += f"Word Count: {row['Word Count']}\n"
+                text += "-" * 50 + "\n"
+            return text.encode('utf-8')
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.download_button(label="📜 Download CSV", data=export_to_csv(results), file_name="SEO_Analysis.csv", mime="text/csv")
+        with col2:
+            st.download_button(label="📄 Download DOCX", data=export_to_docx(results), file_name="SEO_Analysis.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        with col3:
+            st.download_button(label="📄 Download TXT", data=export_to_txt(results), file_name="SEO_Analysis.txt", mime="text/plain")
